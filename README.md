@@ -16,17 +16,27 @@
 
 ## 실행
 
-가장 간단한 방법은 `index.html`을 브라우저로 여는 것. 기록은 localStorage에 남는다.
+**배포본: https://hazakpark.github.io/dungeon-log/**
 
-홈 화면 아이콘으로 쓰려면 HTTPS 호스팅이 필요하다.
+폰 브라우저로 열고 **홈 화면에 추가**해서 쓴다.
+홈 화면 추가를 건너뛰지 말 것 — iOS Safari는 7일간 방문이 없으면 사이트의
+localStorage를 지우는데, 홈 화면에 추가한 앱은 그 대상에서 빠진다.
 
-### GitHub Pages
-1. 새 저장소를 만들고 이 폴더의 파일 전부를 올린다
-2. Settings → Pages → Source: `main` 브랜치 루트
-3. 발급된 주소를 폰 브라우저에서 열고 "홈 화면에 추가"
+로컬에서 확인만 하려면 `index.html`을 브라우저로 그냥 열어도 동작한다.
+단 localStorage는 주소별로 분리되므로 배포본과 기록이 공유되지 않는다.
 
-### Netlify (더 빠름)
-app.netlify.com/drop 에 이 폴더를 통째로 끌어다 놓으면 즉시 주소가 나온다.
+### 배포
+
+이 폴더가 곧 배포 저장소다. GitHub Pages가 `main` 브랜치 루트를 서빙한다.
+
+```
+git add -A && git commit -m "..." && git push
+```
+
+푸시하면 1~2분 안에 반영된다.
+
+**`index.html`을 고쳤으면 `sw.js`의 `CACHE` 버전도 같이 올릴 것.**
+안 올리면 이미 설치한 기기가 오프라인에서 옛 버전을 계속 쓴다.
 
 ---
 
