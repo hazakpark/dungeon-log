@@ -221,6 +221,19 @@ function derive(){
   S.clearStreak=c;
 }
 
+/* 과거 날짜의 log는 어디에도 표시되지 않는다 — 던전 탭이 오늘 것만 쓰고
+   일지는 done/mood/note/drops로 그린다. 그런데 계속 쌓여서 동기화 용량의 절반을
+   차지하고, 2년이면 data.json이 GitHub Contents API의 1MB 한계를 넘긴다.
+   버려도 정보 손실이 없다: 로그 문장은 done과 drops에서 다시 만들어진다. */
+function pruneLogs(){
+  var n=0;
+  Object.keys(S.days).forEach(function(k){
+    var d=S.days[k];
+    if(k!==TODAY&&d.log&&d.log.length){ d.log=[]; n++; }
+  });
+  return n;
+}
+
 /* ---------- 상태 저장 ---------- */
 function commit(){ write(S); }
 
@@ -251,10 +264,11 @@ function b64dec(x){
 function ghUrl(path){
   return 'https://api.github.com/repos/'+S.sync.repo+'/contents/'+path;
 }
-function ghFetch(url,opt){
+function ghFetch(url,opt,raw){
   opt=opt||{};
   opt.headers={'Authorization':'Bearer '+token(),
-    'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'};
+    'Accept':raw?'application/vnd.github.raw':'application/vnd.github+json',
+    'X-GitHub-Api-Version':'2022-11-28'};
   return fetch(url,opt);
 }
 function ghGet(path){                        // {text,sha} 또는 없으면 null
@@ -262,7 +276,17 @@ function ghGet(path){                        // {text,sha} 또는 없으면 null
     if(r.status===404) return null;
     if(r.status===401||r.status===403) throw new Error('토큰이 거부됐다 ('+r.status+')');
     if(!r.ok) throw new Error('불러오기 실패 ('+r.status+')');
-    return r.json().then(function(j){ return {text:b64dec(j.content||''),sha:j.sha}; });
+    return r.json().then(function(j){
+      // 1MB를 넘으면 content가 빈 문자열, encoding이 'none'으로 온다.
+      // 그대로 두면 파싱이 실패하고 "원격이 비었다"로 오인한다. raw로 다시 받는다.
+      if(j.encoding==='none'||!j.content){
+        return ghFetch(ghUrl(path),null,true).then(function(r2){
+          if(!r2.ok) throw new Error('큰 파일 읽기 실패 ('+r2.status+')');
+          return r2.text().then(function(t){ return {text:t,sha:j.sha}; });
+        });
+      }
+      return {text:b64dec(j.content),sha:j.sha};
+    });
   });
 }
 function ghPut(path,text,sha,msg){
@@ -323,7 +347,10 @@ function syncFail(e){
 function pushNow(){
   if(!configured()||syncing||!dirty) return Promise.resolve();
   syncing=true;
-  var needMd=wantMd;
+  // 먼저 내려둔다. 푸시가 나가는 동안 생긴 변경이 dirty를 다시 세울 수 있어야 한다.
+  // 나중에 내리면 비행 중의 변경이 큐에서 사라진다.
+  dirty=false;
+  var needMd=wantMd; wantMd=false;
   return ghPut('data.json',JSON.stringify(exportState(),null,1),S.sync.sha,'기록 '+TODAY)
     .then(function(sha){ S.sync.sha=sha; })
     .catch(function(e){
@@ -350,8 +377,8 @@ function pushNow(){
           });
         });
     })
-    .then(function(){ dirty=false; wantMd=false; syncOk(); })
-    .catch(syncFail)
+    .then(syncOk)
+    .catch(function(e){ dirty=true; if(needMd) wantMd=true; syncFail(e); })
     .then(function(){ syncing=false; commit(); renderStatus(); renderDungeon(); });
 }
 function pullThenPush(){
@@ -359,10 +386,17 @@ function pullThenPush(){
   return ghGet('data.json').then(function(g){
     if(g){
       S.sync.sha=g.sha;
-      var remote=null;
-      try{ remote=migrate(JSON.parse(g.text)); }catch(_){}
-      if(mergeInto(remote)){ dirty=true; renderAll(); }
-    } else dirty=true;                       // 원격이 비었다 → 첫 업로드
+      var remote;
+      // 원격을 읽지 못한 걸 "비었다"로 착각하면 안 된다. 실패는 실패로 보고하고
+      // 푸시하지 않는다 — 읽지 못한 원격을 덮어쓰는 게 최악이다.
+      try{ remote=migrate(JSON.parse(g.text)); }
+      catch(e){ throw new Error('원격 기록을 읽을 수 없다'); }
+      if(!remote) throw new Error('원격 기록의 형식이 맞지 않는다');
+      if(mergeInto(remote)) renderAll();
+    }
+    // dirty를 기억에 의존하지 않는다. 실제로 다른지 비교해서 판정한다.
+    // 이러면 푸시가 중단됐거나 플래그를 잃어버린 경우에도 다음 부팅에서 스스로 낫는다.
+    if(!g||g.text!==JSON.stringify(exportState(),null,1)) dirty=true;
     syncOk(); commit(); renderStatus();
     if(dirty) return pushNow();
   }).catch(function(e){ syncFail(e); commit(); renderStatus(); renderDungeon(); });
@@ -478,7 +512,14 @@ function elapsedMs(){
   return S.timer.running ? acc+(Date.now()-S.timer.from) : acc;
 }
 function startTimer(qid){
-  if(S.timer&&S.timer.qid!==qid) stopTimer(false);
+  if(S.timer&&S.timer.qid!==qid){
+    // 타이머는 하나뿐이라 바꾸면 쌓인 시간이 사라진다. 잘못 눌러 25분을
+    // 날리는 일이 없도록, 버릴 게 있을 때만 묻는다.
+    var lost=Math.floor(elapsedMs()/60000), prev=findQ(S.timer.qid);
+    if(lost>=1&&!confirm('「'+(prev?prev.name:'진행 중인 퀘스트')+'」에 쌓인 '+
+      lost+'분이 사라진다. 계속할까?')) return;
+    stopTimer(false);
+  }
   S.timer={qid:qid,from:Date.now(),acc:(S.timer&&S.timer.qid===qid?S.timer.acc:0),running:true};
   commit(); runTick(); renderDungeon();
 }
@@ -526,17 +567,33 @@ function complete(q,minutes,auto){
   if(!auto){ var n=el('bx-'+q.id); if(n) burst(n); }
   else { setTimeout(function(){ var n=el('bx-'+q.id); if(n) burst(n); },40); }
 }
+/* 완주 취소. 그날 추첨으로 얻은 증표를 회수한다(추첨 결과 자체는 남는다). */
+function dropClear(d){
+  d.cleared=false;
+  if(!d.clearDrop) return null;
+  var i=d.drops.indexOf(d.clearDrop);
+  if(i>=0) d.drops.splice(i,1);
+  return d.clearDrop;
+}
+/* 편성이 바뀌면 오늘의 완주 여부를 다시 판정한다.
+   퀘스트를 지워서 전부 완료가 되거나, 더해서 완주가 깨지는 경우를 잡는다. */
+function recheckClear(){
+  if(!S.quests.length) return;
+  var d=day(TODAY);
+  var all=S.quests.every(function(x){ return !!d.done[x.id]; });
+  if(all&&!d.cleared) onClear(d);
+  else if(!all&&d.cleared){
+    var lost=dropClear(d);
+    if(lost) push(TODAY,'「'+lost+'」을(를) 내려놓았다.','dim');
+  }
+}
 function uncomplete(q){
   var d=day(TODAY);
   if(!d.done[q.id]) return;
   delete d.done[q.id];
   if(d.cleared){
-    d.cleared=false;
-    if(d.clearDrop){                        // 완주로 얻은 증표는 되돌려 놓는다
-      var i=d.drops.indexOf(d.clearDrop);
-      if(i>=0) d.drops.splice(i,1);
-      push(TODAY,'「'+d.clearDrop+'」을(를) 내려놓았다.','dim');
-    }
+    var lost=dropClear(d);
+    if(lost) push(TODAY,'「'+lost+'」을(를) 내려놓았다.','dim');
   }
   derive(); commit(); markDirty(); renderDungeon(); renderStatus();
 }
@@ -987,11 +1044,14 @@ document.addEventListener('click',function(e){
     S.quests.push({id:'q'+Date.now(),name:name,mode:mode,target:min,
       xp:mode==='timer'?min:15});
     S.questsUpdatedAt=new Date().toISOString();
+    recheckClear(); derive();
     commit(); markDirty(); renderConfig(); renderStatus(); renderDungeon(); return;
   }
   if(a==='delq'){
     S.quests=S.quests.filter(function(x){ return x.id!==qid; });
     S.questsUpdatedAt=new Date().toISOString();
+    if(S.timer&&S.timer.qid===qid) stopTimer(false);   // 지운 퀘스트의 타이머는 멈춘다
+    recheckClear(); derive();
     commit(); markDirty(); renderConfig(); renderStatus(); renderDungeon(); return;
   }
   if(a==='sy-save'){
@@ -1048,10 +1108,13 @@ document.addEventListener('click',function(e){
     f.click(); return;
   }
   if(a==='wipe'){
-    if(confirm('모든 기록을 지운다. 되돌릴 수 없다.')){
-      var keepRepo=S.sync&&S.sync.repo;
+    // 연결을 남겨두면 다음 실행 때 원격이 병합돼 지운 기록이 되살아난다.
+    // 삭제 버튼이 거짓말을 하지 않으려면 연결도 같이 끊어야 한다.
+    if(confirm('이 기기의 기록을 모두 지운다.\n\n'+
+       '저장소 연결도 해제된다. 저장소에 올라간 사본은 그대로 남으므로,\n'+
+       '다시 연결하고 「저장소에서 복원」을 누르면 되돌릴 수 있다.')){
       S=fresh();
-      if(keepRepo) S.sync.repo=keepRepo;     // 저장소 연결은 남긴다(복원하려면 필요하다)
+      dirty=false; wantMd=false;
       derive(); commit(); TODAY=keyOf(); renderAll(); openEntry();
     }
     return;
@@ -1067,11 +1130,15 @@ document.addEventListener('input',function(e){
 /* ---------- 날짜 전환 감시 ---------- */
 setInterval(function(){
   var k=keyOf();
-  if(k!==TODAY){ TODAY=k; stopTimer(false); renderAll(); if(needEntry()) openEntry(); }
+  if(k!==TODAY){
+    TODAY=k; stopTimer(false); pruneLogs(); commit(); markDirty(true);
+    renderAll(); if(needEntry()) openEntry();
+  }
 },30000);
 
 /* ---------- 부팅 ---------- */
 derive();
+if(pruneLogs()) commit();
 // 어제 켜둔 타이머가 오늘로 넘어오면 안 된다. 앱이 닫혀 있는 동안에는
 // 날짜 전환 감시(하단 setInterval)가 돌지 않아 그대로 살아남는다.
 if(S.timer&&keyOf(new Date(S.timer.from))!==TODAY) stopTimer(false);
