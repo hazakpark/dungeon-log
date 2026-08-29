@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#060d09">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>던전 로그</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>
+:root{
+  --bg:#060d09; --panel:#0b1a11; --line:#1a4a2e;
+  --fg:#3ddc84; --dim:#1f6b45; --bright:#8ff0b8;
+  --gold:#e8d44d; --warn:#ff8c5a; --violet:#a98bff;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:14px;line-height:1.75;-webkit-text-size-adjust:100%}
+body{padding-bottom:calc(58px + env(safe-area-inset-bottom))}
+#app{max-width:560px;margin:0 auto;padding:14px 14px 0}
+h1,h2,h3{font-size:14px;font-weight:400;margin:0}
+button{font:inherit;color:var(--fg);background:none;border:1px solid var(--line);
+  padding:6px 10px;cursor:pointer;border-radius:0;-webkit-tap-highlight-color:transparent}
+button:active{transform:translateY(1px)}
+button.solid{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+button.ghost{border:none;color:var(--dim);padding:2px 4px}
+input,select{font:inherit;background:var(--panel);border:1px solid var(--line);
+  color:var(--fg);padding:7px 9px;border-radius:0;width:100%}
+input::placeholder{color:#17402a}
+.dim{color:var(--dim)}.bright{color:var(--bright)}.gold{color:var(--gold)}
+.warn{color:var(--warn)}.vio{color:var(--violet)}
+.row{display:flex;gap:8px;align-items:center}
+.sp{display:flex;justify-content:space-between;gap:8px}
+.box{border:1px solid var(--line);padding:8px 10px}
+.sec{color:var(--dim);margin:16px 0 6px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+#tabs{position:fixed;left:0;right:0;bottom:0;background:var(--bg);
+  border-top:1px solid var(--line);display:flex;max-width:560px;margin:0 auto;
+  padding-bottom:env(safe-area-inset-bottom);z-index:20}
+#tabs button{flex:1;border:none;color:var(--dim);padding:14px 0;font-size:13px}
+#tabs button.on{color:var(--gold)}
+.q{display:flex;gap:8px;align-items:flex-start;padding:5px 0;width:100%;
+  border:none;text-align:left}
+.bx{display:inline-block;position:relative;flex:0 0 auto}
+.pip{position:absolute;width:4px;height:4px;pointer-events:none;z-index:5}
+.done{color:var(--dim);text-decoration:line-through}
+.clear-banner{margin-top:14px;border:3px solid var(--gold);background:#241f06;
+  padding:9px;text-align:center;color:var(--gold);box-shadow:4px 4px 0 #0d0d02}
+#veil{position:fixed;inset:0;background:var(--bg);z-index:50;overflow-y:auto;
+  padding:24px 16px calc(24px + env(safe-area-inset-bottom));display:none}
+#veil.on{display:block}
+.veil-in{max-width:560px;margin:0 auto}
+.tag{border:1px solid var(--line);padding:3px 9px;color:var(--fg);font-size:13px}
+.tag.on{background:var(--gold);color:var(--bg);border-color:var(--gold)}
+.err{color:var(--warn);font-size:12px;min-height:18px}
+.cur{display:inline-block;width:8px;height:15px;background:var(--fg);
+  vertical-align:-2px;animation:blk 1.05s steps(1) infinite}
+@keyframes blk{0%,49%{opacity:1}50%,100%{opacity:0}}
+.jd{border-left:2px solid var(--line);padding:2px 0 2px 10px;margin-bottom:12px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.slot{border:1px solid var(--line);padding:9px;text-align:center}
+.slot.have{border-color:var(--gold)}
+hr{border:none;border-top:1px solid var(--line);margin:16px 0}
+@media (prefers-reduced-motion:reduce){.cur{animation:none}}
+</style>
+</head>
+<body>
+
+<div id="app">
+  <header id="status"></header>
+  <main>
+    <section id="v-dungeon"></section>
+    <section id="v-journal" hidden></section>
+    <section id="v-items" hidden></section>
+    <section id="v-config" hidden></section>
+  </main>
+</div>
+
+<nav id="tabs" role="tablist"></nav>
+<div id="veil" role="dialog" aria-modal="true"><div class="veil-in" id="veil-in"></div></div>
+
+<script>
+(function(){
+"use strict";
+
+/* ---------- 상수 ---------- */
+var KEY='dungeon-log-v1';
+var RESET_HOUR=4;
+var MOODS=['집중','고양','평온','피로','무기력'];
+var TOKENS=['집중의 증표','인내의 증표','새벽의 증표','정진의 증표','고요의 증표'];
+var RARE='몰입의 결정';
+var RECOVER='재정비의 증표';
+
+/* ---------- 저장 ---------- */
+var mem=null, persistent=true;
+function read(){
+  try{ var r=localStorage.getItem(KEY); return r?JSON.parse(r):null; }
+  catch(e){ persistent=false; return mem; }
+}
+function write(d){
+  mem=d;
+  try{ localStorage.setItem(KEY,JSON.stringify(d)); }
+  catch(e){ persistent=false; }
+}
+function fresh(){
+  return {
+    version:2,
+    quests:[
+      {id:'q1',name:'영어 공부',mode:'timer',target:30,xp:30},
+      {id:'q2',name:'CIS 공부',mode:'timer',target:30,xp:30},
+      {id:'q3',name:'말씀 읽기 + 기도',mode:'check',target:10,xp:15}
+    ],
+    days:{}, totalXp:0, entryStreak:0, clearStreak:0, bestClear:0,
+    items:{}, lastEntry:null, timer:null, dayCount:0,
+    questsUpdatedAt:null,
+    sync:{repo:'',lastOk:null,lastErr:null,sha:null,mdSha:{}}
+  };
+}
+/* v1 → v2. 읽을 수 없으면 null을 돌려준다(가져오기에서 판별). */
+function migrate(d){
+  if(!d||typeof d!=='object'||!d.quests||!d.days) return null;
+  var v=d.version||1;
+  if(v>2) return null;                      // 미래 버전은 건드리지 않는다
+  if(v<2){
+    Object.keys(d.days).forEach(function(k){
+      var y=d.days[k];
+      if(!y.drops) y.drops=[];
+      if(y.rolled===undefined) y.rolled=!!y.cleared;   // 이미 완주한 날은 추첨을 마친 것으로 본다
+      if(y.clearDrop===undefined) y.clearDrop=null;    // 과거 드랍의 출처는 알 수 없다
+    });
+    if(d.questsUpdatedAt===undefined) d.questsUpdatedAt=null;
+    d.version=2;
+  }
+  if(!d.sync) d.sync={repo:'',lastOk:null,lastErr:null,sha:null,mdSha:{}};
+  if(!d.sync.mdSha) d.sync.mdSha={};
+  return d;
+}
+var S=migrate(read())||fresh();
+
+/* ---------- 날짜 (새벽 4시 경계) ---------- */
+function pad(n){return String(n).padStart(2,'0');}
+function shifted(d){ return new Date(d.getTime()-RESET_HOUR*3600000); }
+function keyOf(d){ var t=shifted(d||new Date());
+  return t.getFullYear()+'-'+pad(t.getMonth()+1)+'-'+pad(t.getDate()); }
+function keyPlus(k,delta){
+  var p=k.split('-'); var d=new Date(+p[0],+p[1]-1,+p[2]);
+  d.setDate(d.getDate()+delta);
+  return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+}
+function daysBetween(a,b){
+  var pa=a.split('-'), pb=b.split('-');
+  var da=new Date(+pa[0],+pa[1]-1,+pa[2]), db=new Date(+pb[0],+pb[1]-1,+pb[2]);
+  return Math.round((db-da)/86400000);
+}
+function hm(){ var d=new Date(); return pad(d.getHours())+':'+pad(d.getMinutes()); }
+var TODAY=keyOf();
+
+/* ---------- 레벨 ---------- */
+function needFor(lv){ return 100+(lv-1)*50; }
+function levelInfo(){
+  var lv=1,rest=S.totalXp;
+  while(rest>=needFor(lv)){ rest-=needFor(lv); lv++; }
+  return {lv:lv,cur:rest,need:needFor(lv)};
+}
+var RANKS=[[1,'견습 모험가'],[3,'초심자 용사'],[5,'숙련된 탐험가'],
+           [8,'베테랑 기사'],[12,'전설의 영웅'],[20,'신화 속 존재']];
+function rank(lv){ var r=RANKS[0][1];
+  RANKS.forEach(function(x){ if(lv>=x[0]) r=x[1]; }); return r; }
+function bar(cur,need,n){
+  n=n||10; var f=Math.max(0,Math.min(n,Math.round(cur/need*n)));
+  return '▓'.repeat(f)+'░'.repeat(n-f);
+}
+
+/* ---------- 하루 레코드 ---------- */
+function day(k){
+  if(!S.days[k]) S.days[k]={entered:false,done:{},log:[],cleared:false,
+    returned:false,mood:null,note:'',xp:0,drops:[],mult:1,
+    rolled:false,clearDrop:null};
+  return S.days[k];
+}
+function push(k,text,cls){
+  var d=day(k); d.log.push({t:hm(),x:text,c:cls||''});
+  if(d.log.length>200) d.log.shift();
+}
+
+/* ---------- 파생값 재계산 ----------
+   days가 유일한 진실이다. XP·스트릭·소지품은 전부 여기서 유도한다.
+   되돌리기든 병합이든 복원이든, days만 맞으면 나머지가 어긋날 수 없다. */
+function derive(){
+  var keys=Object.keys(S.days).sort();
+  var items={}, total=0, count=0, last=null, best=0, run=0;
+
+  keys.forEach(function(k){
+    var d=S.days[k], xp=0;
+    Object.keys(d.done).forEach(function(q){ xp+=d.done[q].xp||0; });
+    d.xp=xp; total+=xp;
+    (d.drops||[]).forEach(function(n){ items[n]=(items[n]||0)+1; });
+    if(d.entered){ count++; last=k; }
+    if(d.cleared){
+      // 키가 정렬돼 있으므로 전날이 완주였다면 직전 반복이 그 날이다
+      run=(S.days[keyPlus(k,-1)]||{}).cleared?run+1:1;
+      if(run>best) best=run;
+    } else run=0;
+  });
+
+  S.totalXp=total; S.items=items; S.dayCount=count;
+  S.lastEntry=last; S.bestClear=best;
+
+  var k2=last, e=0;
+  while(k2&&S.days[k2]&&S.days[k2].entered){ e++; k2=keyPlus(k2,-1); }
+  S.entryStreak=e;
+
+  // 오늘 아직 못 깼어도 어제까지 쌓은 연속 완주는 살아있다
+  var a=last, c=0;
+  if(a&&!(S.days[a]||{}).cleared) a=keyPlus(a,-1);
+  while(a&&S.days[a]&&S.days[a].cleared){ c++; a=keyPlus(a,-1); }
+  S.clearStreak=c;
+}
+
+/* ---------- 상태 저장 ---------- */
+function commit(){ write(S); }
+
+/* ================= 원격 사본 (GitHub 비공개 저장소) =================
+   localStorage 쓰기는 절대 이쪽에 의존하지 않는다. 오프라인이든 토큰이
+   만료됐든 앱은 그대로 돌아가고, 밀린 동기화만 나중에 따라붙는다. */
+
+var TOKEN_KEY='dungeon-log-token';           // S와 분리한다. 내보내기에 토큰이 섞이면 안 된다
+function token(){ try{ return localStorage.getItem(TOKEN_KEY)||''; }catch(e){ return ''; } }
+function setToken(t){
+  try{ t?localStorage.setItem(TOKEN_KEY,t):localStorage.removeItem(TOKEN_KEY); }catch(e){}
+}
+function configured(){ return !!(S.sync&&S.sync.repo&&token()); }
+
+/* btoa는 Latin1 밖에서 예외를 던진다. 한줄평이 한글이라 반드시 거쳐야 한다. */
+function b64enc(str){
+  var b=new TextEncoder().encode(str), s='';
+  for(var i=0;i<b.length;i+=0x8000)          // 청크로 끊어 apply 스택 초과를 피한다
+    s+=String.fromCharCode.apply(null,b.subarray(i,i+0x8000));
+  return btoa(s);
+}
+function b64dec(x){
+  var s=atob(String(x).replace(/\s/g,'')), b=new Uint8Array(s.length);
+  for(var i=0;i<s.length;i++) b[i]=s.charCodeAt(i);
+  return new TextDecoder().decode(b);
+}
+
+function ghUrl(path){
+  return 'https://api.github.com/repos/'+S.sync.repo+'/contents/'+path;
+}
+function ghFetch(url,opt){
+  opt=opt||{};
+  opt.headers={'Authorization':'Bearer '+token(),
+    'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'};
+  return fetch(url,opt);
+}
+function ghGet(path){                        // {text,sha} 또는 없으면 null
+  return ghFetch(ghUrl(path)).then(function(r){
+    if(r.status===404) return null;
+    if(r.status===401||r.status===403) throw new Error('토큰이 거부됐다 ('+r.status+')');
+    if(!r.ok) throw new Error('불러오기 실패 ('+r.status+')');
+    return r.json().then(function(j){ return {text:b64dec(j.content||''),sha:j.sha}; });
+  });
+}
+function ghPut(path,text,sha,msg){
+  var body={message:msg,content:b64enc(text)};
+  if(sha) body.sha=sha;
+  return ghFetch(ghUrl(path),{method:'PUT',body:JSON.stringify(body)}).then(function(r){
+    if(r.status===409||r.status===422){ var e=new Error('충돌'); e.conflict=true; throw e; }
+    if(r.status===401||r.status===403) throw new Error('토큰이 거부됐다 ('+r.status+')');
+    if(!r.ok) throw new Error('올리기 실패 ('+r.status+')');
+    return r.json().then(function(j){ return j.content.sha; });
+  });
+}
+
+/* 원격으로 내보낼 상태. sync(기기별 장부)와 timer(돌고 있는 타이머)는 뺀다. */
+function exportState(){
+  var o={}, skip={sync:1,timer:1};
+  Object.keys(S).forEach(function(k){ if(!skip[k]) o[k]=S[k]; });
+  return o;
+}
+
+/* 날짜 단위 병합. 더 많이 진행된 쪽을 남긴다. */
+function pickDay(r,l){
+  var nr=Object.keys(r.done||{}).length, nl=Object.keys(l.done||{}).length;
+  if(nr!==nl) return nr>nl?r:l;
+  if(!!r.returned!==!!l.returned) return r.returned?r:l;
+  return l;                                  // 동률이면 로컬
+}
+function mergeInto(remote){
+  if(!remote||!remote.days) return false;
+  var changed=false;
+  Object.keys(remote.days).forEach(function(k){
+    var r=remote.days[k], l=S.days[k];
+    if(!l){ S.days[k]=r; changed=true; }
+    else if(pickDay(r,l)===r){ S.days[k]=r; changed=true; }
+  });
+  var rt=remote.questsUpdatedAt||'', lt=S.questsUpdatedAt||'';
+  if(remote.quests&&remote.quests.length&&rt>lt){
+    S.quests=remote.quests; S.questsUpdatedAt=remote.questsUpdatedAt; changed=true;
+  }
+  if(changed) derive();                      // 파생값은 병합하지 않는다. 다시 계산한다
+  return changed;
+}
+
+var dirty=false, wantMd=false, syncing=false, pushTimer=null;
+
+function markDirty(md){
+  dirty=true; if(md) wantMd=true;
+  if(!configured()) return;
+  clearTimeout(pushTimer);
+  pushTimer=setTimeout(pushNow,10000);       // 체크마다 커밋하지 않고 모아서 보낸다
+}
+function syncOk(){
+  S.sync.lastOk=new Date().toISOString(); S.sync.lastErr=null;
+}
+function syncFail(e){
+  S.sync.lastErr=String((e&&e.message)||e||'알 수 없는 오류');
+}
+function pushNow(){
+  if(!configured()||syncing||!dirty) return Promise.resolve();
+  syncing=true;
+  var needMd=wantMd;
+  return ghPut('data.json',JSON.stringify(exportState(),null,1),S.sync.sha,'기록 '+TODAY)
+    .then(function(sha){ S.sync.sha=sha; })
+    .catch(function(e){
+      if(!e.conflict) throw e;
+      return ghGet('data.json').then(function(g){        // 충돌 → 원격을 병합하고 한 번만 재시도
+        if(g){
+          S.sync.sha=g.sha;
+          try{ mergeInto(migrate(JSON.parse(g.text))); }catch(_){}
+        }
+        return ghPut('data.json',JSON.stringify(exportState(),null,1),S.sync.sha,'기록 병합 '+TODAY)
+          .then(function(sha){ S.sync.sha=sha; });
+      });
+    })
+    .then(function(){
+      if(!needMd) return;
+      var y=TODAY.slice(0,4), p='journal/'+y+'.md';
+      return ghPut(p,toMarkdown(y),S.sync.mdSha[y],'일지 '+y)
+        .then(function(sha){ S.sync.mdSha[y]=sha; })
+        .catch(function(e){
+          if(!e.conflict) throw e;
+          return ghGet(p).then(function(g){
+            return ghPut(p,toMarkdown(y),g?g.sha:null,'일지 '+y)
+              .then(function(sha){ S.sync.mdSha[y]=sha; });
+          });
+        });
+    })
+    .then(function(){ dirty=false; wantMd=false; syncOk(); })
+    .catch(syncFail)
+    .then(function(){ syncing=false; commit(); renderStatus(); renderDungeon(); });
+}
+function pullThenPush(){
+  if(!configured()){ renderStatus(); return Promise.resolve(); }
+  return ghGet('data.json').then(function(g){
+    if(g){
+      S.sync.sha=g.sha;
+      var remote=null;
+      try{ remote=migrate(JSON.parse(g.text)); }catch(_){}
+      if(mergeInto(remote)){ dirty=true; renderAll(); }
+    } else dirty=true;                       // 원격이 비었다 → 첫 업로드
+    syncOk(); commit(); renderStatus();
+    if(dirty) return pushNow();
+  }).catch(function(e){ syncFail(e); commit(); renderStatus(); renderDungeon(); });
+}
+/* 새 기기에서의 복원. 로컬을 원격으로 통째로 덮어쓴다. */
+function restoreFromRemote(){
+  return ghGet('data.json').then(function(g){
+    if(!g) throw new Error('저장소에 data.json이 없다');
+    var d=migrate(JSON.parse(g.text));
+    if(!d) throw new Error('읽을 수 없는 형식이다');
+    var repo=S.sync.repo, sha=g.sha;
+    S=d; S.sync.repo=repo; S.sync.sha=sha;
+    derive(); syncOk(); commit();
+    TODAY=keyOf(); dirty=false; renderAll();
+  });
+}
+
+function syncAgeDays(){
+  if(!S.sync||!S.sync.lastOk) return null;
+  return (Date.now()-new Date(S.sync.lastOk).getTime())/86400000;
+}
+/* 조용한 실패가 이 앱에서 가장 위험한 고장이다. 항상 보이게 만든다. */
+function syncLine(){
+  if(!S.sync||!S.sync.repo) return {c:'dim',t:'백업 미연결'};
+  if(!token()) return {c:'warn',t:'토큰 없음'};
+  if(S.sync.lastErr) return {c:'warn',t:'백업 실패'};
+  var a=syncAgeDays();
+  if(a===null) return {c:'dim',t:'백업 대기'};
+  if(a>=1) return {c:(a>3?'warn':'dim'),t:'백업 '+Math.floor(a)+'일 전'};
+  return {c:'dim',t:'백업됨'};
+}
+
+/* 화면에 띄우는 경고. 백업이 멈춘 걸 모르고 몇 달을 보내는 게 최악이다. */
+function syncWarn(){
+  var w=function(t){ return '<div class="warn" style="margin-top:12px;font-size:12px">! '+t+'</div>'; };
+  if(!S.sync||!S.sync.repo)
+    return S.dayCount<3?'':w('기록이 이 기기에만 있다. 설정에서 저장소를 연결하면 자동으로 남는다.');
+  if(!token()) return w('백업 토큰이 없다. 설정에서 다시 넣어라.');
+  if(S.sync.lastErr) return w('백업이 실패하고 있다 · '+esc(S.sync.lastErr));
+  var a=syncAgeDays();
+  if(a!==null&&a>3) return w(Math.floor(a)+'일째 백업되지 않았다. 설정에서 확인해라.');
+  return '';
+}
+
+/* 사람이 읽는 사본. 5년 뒤 이 앱이 안 돌아가도 이 파일은 읽힌다. */
+function toMarkdown(y){
+  var out=['# '+y+' 던전 로그','',
+    '던전 로그가 자동으로 남기는 사본이다. 앱 없이 그냥 읽으면 된다.',''];
+  Object.keys(S.days).sort().forEach(function(k){
+    if(k.slice(0,4)!==y) return;
+    var d=S.days[k];
+    if(!d.entered) return;
+    var ids=Object.keys(d.done), mins=0;
+    ids.forEach(function(q){ mins+=d.done[q].min||0; });
+    out.push('## '+k+' · '+(d.cleared?'클리어':'부분 탐험')+' · '+ids.length+'개 완료');
+    var meta=[];
+    if(d.mood) meta.push('「'+d.mood+'」');
+    meta.push('EXP +'+d.xp);
+    if(mins) meta.push(mins+'분 탐험');
+    out.push(meta.join(' · '),'');
+    if(d.note) out.push('> '+d.note,'');
+    var order=S.quests.map(function(q){ return q.id; });
+    ids.sort(function(a,b){                  // 편성 순서 우선, 빠진 건 뒤로
+      var ia=order.indexOf(a), ib=order.indexOf(b);
+      return (ia<0?99:ia)-(ib<0?99:ib);
+    }).forEach(function(qid){
+      var r=d.done[qid], q=findQ(qid);
+      var name=r.n||(q&&q.name)||qid;        // 완료 시점의 이름을 그대로 쓴다
+      out.push('- '+name+(r.min?' '+r.min+'분':'')+(r.at?' ('+r.at+')':''));
+    });
+    if(d.drops&&d.drops.length)
+      out.push('','획득: '+d.drops.map(function(x){ return '「'+x+'」'; }).join(' '));
+    out.push('');
+  });
+  return out.join('\n');
+}
+
+document.addEventListener('visibilitychange',function(){
+  if(document.visibilityState==='hidden'&&dirty){ clearTimeout(pushTimer); pushNow(); }
+});
+window.addEventListener('pagehide',function(){
+  if(dirty){ clearTimeout(pushTimer); pushNow(); }
+});
+
+/* ---------- 렌더 헬퍼 ---------- */
+function el(id){ return document.getElementById(id); }
+function esc(s){ return String(s).replace(/[&<>"]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+/* ---------- 픽셀 이펙트 ---------- */
+function burst(host){
+  if(window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches) return;
+  var cols=['#e8d44d','#3ddc84','#ffffff','#ff8c5a'];
+  for(var i=0;i<12;i++){
+    var p=document.createElement('span'); p.className='pip';
+    p.style.background=cols[i%4]; p.style.left='6px'; p.style.top='8px';
+    host.appendChild(p);
+    var a=Math.PI*2*i/12, dist=22+Math.random()*18;
+    (function(node,dx,dy){
+      var an=node.animate([{transform:'translate(0,0)',opacity:1},
+        {transform:'translate('+dx+'px,'+dy+'px)',opacity:0}],
+        {duration:520,easing:'steps(5,end)'});
+      an.onfinish=function(){ node.remove(); };
+    })(p,Math.cos(a)*dist,Math.sin(a)*dist);
+  }
+}
+
+/* ---------- 타이머 ---------- */
+var tick=null;
+function elapsedMs(){
+  if(!S.timer) return 0;
+  var acc=S.timer.acc||0;
+  return S.timer.running ? acc+(Date.now()-S.timer.from) : acc;
+}
+function startTimer(qid){
+  if(S.timer&&S.timer.qid!==qid) stopTimer(false);
+  S.timer={qid:qid,from:Date.now(),acc:(S.timer&&S.timer.qid===qid?S.timer.acc:0),running:true};
+  commit(); runTick(); renderDungeon();
+}
+function pauseTimer(){
+  if(!S.timer||!S.timer.running) return;
+  S.timer.acc=elapsedMs(); S.timer.running=false; commit(); renderDungeon();
+}
+function stopTimer(rerender){
+  S.timer=null; commit(); if(rerender!==false) renderDungeon();
+}
+function runTick(){
+  if(tick) return;
+  tick=setInterval(function(){
+    if(!S.timer||!S.timer.running){ return; }
+    var q=findQ(S.timer.qid);
+    if(!q){ stopTimer(); return; }
+    var mins=elapsedMs()/60000;
+    if(mins>=q.target){ complete(q,Math.round(mins),true); return; }
+    var n=el('t-'+q.id); if(n) n.textContent=fmtClock(elapsedMs());
+  },1000);
+}
+function fmtClock(ms){
+  var s=Math.floor(ms/1000);
+  return pad(Math.floor(s/60))+':'+pad(s%60);
+}
+function findQ(id){
+  for(var i=0;i<S.quests.length;i++) if(S.quests[i].id===id) return S.quests[i];
+  return null;
+}
+
+/* ---------- 퀘스트 완료 ---------- */
+function complete(q,minutes,auto){
+  var d=day(TODAY);
+  if(d.done[q.id]) return;
+  var gain=Math.round(q.xp*(d.mult||1));
+  // 이름을 같이 박아둔다. 나중에 퀘스트를 바꿔도 과거 기록의 이름은 남아야 한다
+  d.done[q.id]={min:minutes||q.target,at:hm(),xp:gain,n:q.name};
+  if(S.timer&&S.timer.qid===q.id) S.timer=null;
+  push(TODAY,'「'+q.name+'」을(를) 마쳤다.  EXP +'+gain);
+  var all=S.quests.every(function(x){ return !!d.done[x.id]; });
+  if(all&&!d.cleared) onClear(d);
+  derive(); commit(); markDirty(); renderDungeon(); renderStatus();
+  if(!auto){ var n=el('bx-'+q.id); if(n) burst(n); }
+  else { setTimeout(function(){ var n=el('bx-'+q.id); if(n) burst(n); },40); }
+}
+function uncomplete(q){
+  var d=day(TODAY);
+  if(!d.done[q.id]) return;
+  delete d.done[q.id];
+  if(d.cleared){
+    d.cleared=false;
+    if(d.clearDrop){                        // 완주로 얻은 증표는 되돌려 놓는다
+      var i=d.drops.indexOf(d.clearDrop);
+      if(i>=0) d.drops.splice(i,1);
+      push(TODAY,'「'+d.clearDrop+'」을(를) 내려놓았다.','dim');
+    }
+  }
+  derive(); commit(); markDirty(); renderDungeon(); renderStatus();
+}
+function onClear(d){
+  d.cleared=true;
+  push(TODAY,'오늘의 모든 퀘스트를 완수했다.','gold');
+  if(!d.rolled){                            // 추첨은 하루에 한 번뿐. 재완주로 다시 굴리지 않는다
+    d.rolled=true;
+    var streak=1, prev=S.days[keyPlus(TODAY,-1)];
+    if(prev&&prev.cleared) streak=(S.clearStreak||0)+1;
+    var chance=0.35+Math.min(0.15,(streak-1)*0.02);
+    if(Math.random()<0.05) d.clearDrop=RARE;
+    else if(Math.random()<chance) d.clearDrop=TOKENS[Math.floor(Math.random()*TOKENS.length)];
+    else d.clearDrop=null;
+  }
+  if(d.clearDrop) grant(d.clearDrop,d);
+  else push(TODAY,'이번 탐험에서는 아무것도 줍지 못했다.','dim');
+}
+function grant(name,d){
+  d.drops.push(name);                       // 소지품 개수는 derive가 센다
+  push(TODAY,'「'+name+'」을(를) 획득했다.', name===RARE?'vio':'warn');
+}
+
+/* ---------- 입장 / 복귀 ---------- */
+function needEntry(){ return !day(TODAY).entered; }
+function doEnter(){
+  var d=day(TODAY);
+  var last=S.lastEntry, gap=last?daysBetween(last,TODAY):0;
+  d.entered=true;
+  if(!last){
+    derive();
+    push(TODAY,'처음으로 던전에 발을 들였다.','bright');
+  } else if(gap===1){
+    derive();
+    push(TODAY,'던전에 입장했다.  연속 '+S.entryStreak+'일차','bright');
+  } else {
+    d.mult=1.5;
+    grant(RECOVER,d);
+    derive();
+    push(TODAY,gap+'일 만에 던전으로 돌아왔다.  오늘 EXP 1.5배','bright');
+  }
+  commit(); markDirty(); closeVeil(); renderAll();
+}
+
+/* ---------- 지난 기록 ---------- */
+function yearsAgoKey(n){
+  var p=TODAY.split('-');
+  return (+p[0]-n)+'-'+p[1]+'-'+p[2];       // 정확히 같은 월/일
+}
+function echoLabel(n){
+  return n>=30 ? Math.round(n/30)+'달 전' : n+'일 전';
+}
+/* 몇 년 전 오늘을 최우선으로 본다. 5년짜리 앱의 보상이 여기서 나온다. */
+function pastEcho(){
+  var y,k,d;
+  for(y=5;y>=1;y--){
+    k=yearsAgoKey(y); d=S.days[k];
+    if(d&&d.note) return {label:y+'년 전 오늘',key:k,mood:d.mood,note:d.note,big:true};
+  }
+  var steps=[180,90,30,14,7,1];
+  for(var i=0;i<steps.length;i++){
+    k=keyPlus(TODAY,-steps[i]); d=S.days[k];
+    if(d&&d.note) return {label:echoLabel(steps[i]),key:k,mood:d.mood,note:d.note,big:false};
+  }
+  var keys=Object.keys(S.days).filter(function(x){ return x!==TODAY&&S.days[x].note; }).sort();
+  if(keys.length){
+    var kk=keys[keys.length-1];
+    return {label:echoLabel(daysBetween(kk,TODAY)),key:kk,
+      mood:S.days[kk].mood,note:S.days[kk].note,big:false};
+  }
+  return null;
+}
+function statLine(){
+  var mins=0,count=0;
+  Object.keys(S.days).forEach(function(k){
+    var d=S.days[k];
+    Object.keys(d.done).forEach(function(q){ mins+=d.done[q].min||0; count++; });
+  });
+  if(!count) return null;
+  var h=Math.floor(mins/60), m=mins%60;
+  return '누적 · 퀘스트 '+count+'회 · '+(h?h+'시간 ':'')+m+'분 탐험';
+}
+
+/* ---------- 화면: 상태창 ---------- */
+function renderStatus(){
+  var L=levelInfo(), d=day(TODAY), sy=syncLine();
+  var doneN=S.quests.filter(function(q){ return !!d.done[q.id]; }).length;
+  el('status').innerHTML=
+    '<div class="box">'+
+      '<div class="sp"><span class="bright">'+S.dayCount+'일차 던전</span>'+
+      '<span class="'+(d.cleared?'gold':'dim')+'">'+doneN+'/'+S.quests.length+
+      (d.cleared?' 클리어':'')+'</span></div>'+
+      '<div class="sp"><span class="dim">Lv.<span style="color:var(--fg)">'+L.lv+'</span> '+rank(L.lv)+'</span>'+
+      '<span class="gold">'+bar(L.cur,L.need)+' <span class="dim">'+L.cur+'/'+L.need+'</span></span></div>'+
+      '<div class="sp dim"><span>연속 입장 '+S.entryStreak+'일'+
+      (S.clearStreak>1?' · 연속 완주 '+S.clearStreak+'일':'')+'</span>'+
+      '<span class="'+sy.c+'">'+sy.t+'</span></div>'+
+    '</div>';
+}
+
+/* ---------- 화면: 던전 ---------- */
+function renderDungeon(){
+  var d=day(TODAY), h='';
+  h+='<div class="sec">── 오늘의 퀘스트 ──</div>';
+  S.quests.forEach(function(q){
+    var done=!!d.done[q.id];
+    var active=S.timer&&S.timer.qid===q.id;
+    h+='<div style="padding:3px 0">';
+    h+='<button class="q" data-act="'+(done?'undo':'tap')+'" data-q="'+q.id+'">'+
+        '<span class="bx" id="bx-'+q.id+'">['+(done?'x':' ')+']</span>'+
+        '<span style="flex:1" class="'+(done?'done':'')+'">'+esc(q.name)+
+          (q.mode==='timer'?' <span class="dim">'+q.target+'분</span>':'')+
+        '</span>'+
+        '<span class="'+(done?'dim':'gold')+'">+'+Math.round(q.xp*(d.mult||1))+'</span>'+
+       '</button>';
+    if(active&&!done){
+      h+='<div class="row" style="padding:2px 0 6px 22px">'+
+          '<span class="gold" id="t-'+q.id+'">'+fmtClock(elapsedMs())+'</span>'+
+          '<span class="dim">/ '+q.target+':00</span>'+
+          '<button data-act="'+(S.timer.running?'pause':'resume')+'" data-q="'+q.id+'">'+
+            (S.timer.running?'일시정지':'재개')+'</button>'+
+          '<button data-act="finish" data-q="'+q.id+'">완료</button>'+
+          '<button class="ghost" data-act="abort" data-q="'+q.id+'">취소</button>'+
+        '</div>';
+    }
+    h+='</div>';
+  });
+
+  if(d.cleared&&!d.returned){
+    h+='<div class="clear-banner">★ DUNGEON CLEAR ★</div>'+
+       '<div style="margin-top:10px"><button class="solid" data-act="return" style="width:100%">귀환하여 기록을 남긴다</button></div>';
+  } else if(d.cleared&&d.returned){
+    h+='<div class="clear-banner">★ 귀환 완료 · 「'+esc(d.mood||'')+'」 ★</div>';
+  } else {
+    var left=S.quests.length-S.quests.filter(function(q){return !!d.done[q.id];}).length;
+    h+='<div class="sec warn" style="margin-top:14px">! '+left+'개 남음 · 완주하면 귀환할 수 있다</div>'+
+       '<button class="ghost" data-act="return" style="margin-top:2px">완주하지 않고 귀환하기</button>';
+  }
+
+  h+='<div class="sec">── 모험 기록 ──</div>';
+  var lines=d.log.slice(-8);
+  if(!lines.length) h+='<div class="dim">아직 기록이 없다.</div>';
+  lines.forEach(function(l){
+    h+='<div class="'+(l.c||'')+'">'+l.t+'  '+esc(l.x)+'</div>';
+  });
+  h+='<div class="dim" style="margin-top:10px">&gt; <span class="cur"></span></div>';
+  if(!persistent) h+='<div class="warn" style="margin-top:12px;font-size:12px">저장소를 쓸 수 없는 환경이다. 기록이 유지되지 않는다.</div>';
+  h+=syncWarn();
+  el('v-dungeon').innerHTML=h;
+}
+
+/* ---------- 화면: 일지 ---------- */
+/* 평면 목록은 365개가 쌓이면 못 읽는다. 연 → 월 → 날로 좁혀 들어간다. */
+var jYear=null, jMonth=null, jQ='';
+
+function yearsWithData(){
+  var ys={};
+  Object.keys(S.days).forEach(function(k){ if(S.days[k].entered) ys[k.slice(0,4)]=1; });
+  var a=Object.keys(ys).sort();
+  return a.length?a:[TODAY.slice(0,4)];
+}
+function daysInMonth(y,m){ return new Date(+y,+m,0).getDate(); }
+function dayMark(d){
+  if(!d||!d.entered) return '·';
+  if(d.cleared) return '█';
+  return Object.keys(d.done).length?'▓':'░';
+}
+function dayCard(k,d){
+  var ids=Object.keys(d.done);
+  var h='<div class="jd">'+
+    '<div class="sp"><span class="'+(d.cleared?'gold':'dim')+'">'+k+'</span>'+
+    '<span class="dim">'+ids.length+'개 · EXP '+d.xp+'</span></div>';
+  if(d.mood) h+='<div class="vio">「'+esc(d.mood)+'」</div>';
+  if(d.note) h+='<div class="bright">"'+esc(d.note)+'"</div>';
+  ids.forEach(function(qid){
+    var r=d.done[qid], q=findQ(qid);
+    h+='<div class="dim">· '+esc(r.n||(q&&q.name)||qid)+(r.min?' '+r.min+'분':'')+'</div>';
+  });
+  if(d.drops&&d.drops.length)
+    h+='<div class="warn">'+d.drops.map(function(x){ return '「'+esc(x)+'」'; }).join(' ')+'</div>';
+  return h+'</div>';
+}
+function renderYearView(){
+  var h='<div class="sec dim">█ 완주 &nbsp; ▓ 부분 &nbsp; ░ 입장 &nbsp; · 없음</div>';
+  var total=0, notes=0, cleared=0;
+  for(var m=1;m<=12;m++){
+    var mm=pad(m), strip='', any=false, n=daysInMonth(jYear,m);
+    for(var i=1;i<=n;i++){
+      var d=S.days[jYear+'-'+mm+'-'+pad(i)], c=dayMark(d);
+      if(d&&d.entered){ any=true; total++; if(d.note) notes++; if(d.cleared) cleared++; }
+      strip+=(d&&d.cleared)?'<span class="gold">'+c+'</span>':c;
+    }
+    h+='<div class="row" style="gap:6px">'+
+       '<button class="ghost" data-act="jmonth" data-m="'+mm+'"'+
+         ' style="width:42px;flex:0 0 auto;white-space:nowrap;text-align:right'+
+         (any?';color:var(--fg)':'')+'">'+m+'월</button>'+
+       '<span class="'+(any?'':'dim')+'" style="letter-spacing:1px">'+strip+'</span></div>';
+  }
+  return h+'<div class="sec dim">'+jYear+' · 입장 '+total+'일 · 완주 '+cleared+'일 · 한줄평 '+notes+'개</div>';
+}
+function renderMonthView(){
+  var h='<div class="row" style="margin-top:10px">'+
+        '<button data-act="jback">← '+jYear+'</button>'+
+        '<span class="dim">'+(+jMonth)+'월</span></div>';
+  var n=daysInMonth(jYear,+jMonth), any=false;
+  for(var i=1;i<=n;i++){
+    var k=jYear+'-'+jMonth+'-'+pad(i), d=S.days[k];
+    if(!d||!d.entered) continue;
+    any=true; h+=dayCard(k,d);
+  }
+  return h+(any?'':'<div class="dim">이 달에는 기록이 없다.</div>');
+}
+function renderSearchView(){
+  var q=jQ.toLowerCase();
+  var keys=Object.keys(S.days).filter(function(k){
+    var d=S.days[k];
+    return d.note&&d.note.toLowerCase().indexOf(q)>=0;
+  }).sort().reverse();
+  var h='<div class="sec dim">'+keys.length+'건</div>';
+  if(!keys.length) return h+'<div class="dim">찾지 못했다.</div>';
+  keys.slice(0,80).forEach(function(k){ h+=dayCard(k,S.days[k]); });
+  if(keys.length>80) h+='<div class="dim">… 이하 생략</div>';
+  return h;
+}
+function renderJBody(){
+  var h='';
+  if(jQ) h=renderSearchView();
+  else {
+    h+='<div class="row" style="flex-wrap:wrap;margin-top:10px">';
+    yearsWithData().forEach(function(y){
+      h+='<button class="tag'+(y===jYear?' on':'')+'" data-act="jyear" data-y="'+y+'">'+y+'</button>';
+    });
+    h+='</div>'+(jMonth?renderMonthView():renderYearView());
+  }
+  el('j-body').innerHTML=h;
+}
+function renderJournal(){
+  var years=yearsWithData();
+  if(!jYear||years.indexOf(jYear)<0) jYear=years[years.length-1];
+  // 입력칸은 한 번만 그린다. 검색 중 다시 그리면 포커스가 날아간다
+  el('v-journal').innerHTML='<div class="sec">── 모험 일지 ──</div>'+
+    '<input id="jq" placeholder="한줄평 검색" value="'+esc(jQ)+'">'+
+    '<div id="j-body"></div>';
+  renderJBody();
+}
+
+/* ---------- 화면: 소지품 ---------- */
+function renderItems(){
+  var all=TOKENS.concat([RARE,RECOVER]);
+  var h='<div class="sec">── 소지품 ──</div><div class="grid">';
+  all.forEach(function(n){
+    var c=S.items[n]||0;
+    h+='<div class="slot '+(c?'have':'')+'">'+
+       '<div class="'+(c?(n===RARE?'vio':'gold'):'dim')+'">'+(c?esc(n):'???')+'</div>'+
+       '<div class="dim">'+(c?'× '+c:'미획득')+'</div></div>';
+  });
+  h+='</div>';
+  var s=statLine();
+  if(s) h+='<div class="sec">── 기록 ──</div><div class="bright">'+esc(s)+'</div>'+
+           '<div class="dim">최고 연속 완주 '+(S.bestClear||0)+'일</div>';
+  el('v-items').innerHTML=h;
+}
+
+/* ---------- 화면: 설정 ---------- */
+function renderConfig(){
+  var h='<div class="sec">── 퀘스트 편성 ──</div>';
+  S.quests.forEach(function(q,i){
+    h+='<div class="box" style="margin-bottom:8px">'+
+      '<div class="sp"><span>'+esc(q.name)+'</span>'+
+      '<button class="ghost" data-act="delq" data-q="'+q.id+'">삭제</button></div>'+
+      '<div class="dim">'+(q.mode==='timer'?'타이머 '+q.target+'분':'체크')+' · EXP '+q.xp+'</div></div>';
+  });
+  h+='<div class="sec">── 퀘스트 추가 ──</div>'+
+     '<input id="nq-name" placeholder="퀘스트 이름">'+
+     '<div class="row" style="margin-top:8px">'+
+       '<select id="nq-mode" style="flex:1"><option value="check">체크</option><option value="timer">타이머</option></select>'+
+       '<input id="nq-min" type="number" min="1" max="600" value="20" style="flex:1" aria-label="목표 분">'+
+     '</div>'+
+     '<div class="err" id="nq-err"></div>'+
+     '<button data-act="addq" style="width:100%">편성하기</button>';
+  var sy=syncLine(), sync=S.sync||{};
+  h+='<div class="sec">── 저장소 연결 ──</div>'+
+     '<div class="box" style="margin-bottom:8px">'+
+       '<div class="sp"><span class="dim">상태</span><span class="'+sy.c+'">'+sy.t+'</span></div>'+
+       (sync.lastOk?'<div class="sp dim"><span>마지막 백업</span><span>'+
+         esc(sync.lastOk.replace('T',' ').slice(0,16))+'</span></div>':'')+
+       (sync.lastErr?'<div class="warn" style="font-size:12px">'+esc(sync.lastErr)+'</div>':'')+
+       (sync.repo?'<div style="margin-top:4px"><a href="https://github.com/'+esc(sync.repo)+
+         '" target="_blank" rel="noopener" class="dim">저장소 열기</a></div>':'')+
+     '</div>'+
+     '<input id="sy-repo" placeholder="사용자명/저장소명" value="'+esc(sync.repo||'')+'">'+
+     '<input id="sy-tok" type="password" style="margin-top:8px" placeholder="'+
+       (token()?'토큰 저장됨 · 바꿀 때만 입력':'GitHub 토큰 (fine-grained)')+'">'+
+     '<div class="err" id="sy-err"></div>'+
+     '<div class="row"><button data-act="sy-save" style="flex:1">연결</button>'+
+     '<button data-act="sy-push" style="flex:1">지금 올리기</button></div>'+
+     '<button data-act="sy-pull" style="width:100%;margin-top:8px">저장소에서 복원</button>'+
+     '<div class="dim" style="margin-top:8px;font-size:12px">'+
+       '비공개 저장소에 Contents 읽기/쓰기 권한만 주면 된다. 토큰은 내보내기 파일에 포함되지 않는다.</div>';
+  h+='<div class="sec">── 데이터 ──</div>'+
+     '<div class="row"><button data-act="export" style="flex:1">내보내기</button>'+
+     '<button data-act="import" style="flex:1">가져오기</button></div>'+
+     '<div class="dim" style="margin-top:10px;font-size:12px">하루는 새벽 4시에 갱신된다.</div>'+
+     '<button class="ghost warn" data-act="wipe" style="margin-top:14px">모든 기록 삭제</button>';
+  el('v-config').innerHTML=h;
+}
+
+/* ---------- 오버레이: 입장 ---------- */
+function openEntry(){
+  var last=S.lastEntry, gap=last?daysBetween(last,TODAY):null;
+  var h='<div style="text-align:center;padding:28px 0 20px">'+
+    '<div class="dim">╔══════════════════╗</div>'+
+    '<div class="gold" style="font-size:16px;padding:6px 0">던전 입구</div>'+
+    '<div class="dim">╚══════════════════╝</div></div>';
+  if(gap===null){
+    h+='<div class="bright">낯선 입구가 눈앞에 있다.</div>'+
+       '<div class="dim">오늘의 퀘스트 '+S.quests.length+'개가 기다린다.</div>';
+  } else if(gap===1){
+    h+='<div class="bright">어제에 이어, 다시 입구에 섰다.</div>'+
+       '<div class="dim">연속 '+((S.entryStreak||0)+1)+'일차가 된다.</div>';
+  } else {
+    h+='<div class="warn">'+gap+'일 만이다.</div>'+
+       '<div class="bright">입구는 그대로다. 아무것도 잃지 않았다.</div>'+
+       '<div class="gold" style="margin-top:8px">복귀 보상 · 오늘 EXP 1.5배</div>'+
+       '<div class="warn">「'+RECOVER+'」을(를) 받는다.</div>';
+  }
+  h+='<div class="sec">── 오늘의 퀘스트 ──</div>';
+  S.quests.forEach(function(q){
+    h+='<div>[ ] '+esc(q.name)+(q.mode==='timer'?' <span class="dim">'+q.target+'분</span>':'')+'</div>';
+  });
+  h+='<div style="margin-top:24px"><button class="solid" data-act="enter" style="width:100%;padding:12px">입장한다</button></div>';
+  el('veil-in').innerHTML=h;
+  el('veil').classList.add('on');
+}
+
+/* ---------- 오버레이: 귀환 ---------- */
+var pickedMood=null;
+function openReturn(){
+  var d=day(TODAY);
+  pickedMood=d.mood||null;
+  var doneN=S.quests.filter(function(q){ return !!d.done[q.id]; }).length;
+  var mins=0; Object.keys(d.done).forEach(function(k){ mins+=d.done[k].min||0; });
+  var h='<div class="sec">── 귀환 ──</div>'+
+    '<div class="box"><div class="sp"><span class="bright">'+S.dayCount+'일차 던전</span>'+
+    '<span class="'+(d.cleared?'gold':'warn')+'">'+doneN+'/'+S.quests.length+
+    (d.cleared?' 클리어':' 부분 탐험')+'</span></div>'+
+    '<div class="sp dim"><span>총 '+mins+'분 탐험</span><span>EXP +'+d.xp+'</span></div></div>';
+
+  // 백업이 오래 멈췄으면 귀환할 때 한 번 더 눈에 띄게 알린다
+  var age=syncAgeDays(), stale=(!S.sync.repo&&S.dayCount>=3)||!!S.sync.lastErr||(age!==null&&age>7);
+  if(stale){
+    h+='<div style="border:1px solid var(--warn);padding:8px 10px;margin-top:8px">'+
+       '<div class="warn">! '+(S.sync.repo?'기록이 백업되지 않고 있다.':'기록이 이 기기에만 있다.')+'</div>'+
+       '<div class="dim" style="font-size:12px">설정에서 저장소를 확인하거나, 지금 내보내기로 파일을 받아둬라.</div>'+
+       '<div class="row" style="margin-top:6px"><button data-act="export" style="flex:1">내보내기</button>'+
+       '<button data-act="go-config" style="flex:1">설정 열기</button></div></div>';
+  }
+
+  h+='<div class="sec">&gt; 오늘의 상태</div><div class="row" style="flex-wrap:wrap">';
+  MOODS.forEach(function(m){
+    h+='<button class="tag'+(pickedMood===m?' on':'')+'" data-act="mood" data-m="'+m+'">「'+m+'」</button>';
+  });
+  h+='</div>';
+  h+='<div class="sec">&gt; 한줄 기록</div>'+
+     '<input id="rt-note" placeholder="오늘의 탐험은 어땠나" value="'+esc(d.note||'')+'">'+
+     '<div class="err" id="rt-err"></div>'+
+     '<button class="solid" data-act="submit-return" style="width:100%">기록하고 귀환</button>'+
+     '<button class="ghost" data-act="close-veil" style="width:100%;margin-top:10px">아직 돌아가지 않는다</button>';
+  var echo=pastEcho(), st=statLine();
+  if(echo||st){
+    h+='<div class="sec">── 지난 기록 ──</div>';
+    if(echo) h+='<div class="jd"'+(echo.big?' style="border-left-color:var(--gold)"':'')+'>'+
+                '<div class="'+(echo.big?'gold':'dim')+'">'+esc(echo.label)+' · '+esc(echo.key)+
+                ' <span class="vio">「'+esc(echo.mood||'-')+'」</span></div>'+
+                '<div class="bright">"'+esc(echo.note)+'"</div></div>';
+    if(st) h+='<div class="jd"><div class="bright">'+esc(st)+'</div></div>';
+  }
+  el('veil-in').innerHTML=h;
+  el('veil').classList.add('on');
+}
+function closeVeil(){ el('veil').classList.remove('on'); }
+
+function submitReturn(){
+  var note=(el('rt-note').value||'').trim();
+  if(!pickedMood){ el('rt-err').textContent='상태를 하나 골라라.'; return; }
+  if(!note){ el('rt-err').textContent='한 줄이라도 남겨라.'; return; }
+  var d=day(TODAY);
+  d.mood=pickedMood; d.note=note; d.returned=true;
+  push(TODAY,'던전에서 귀환했다.  상태: 「'+pickedMood+'」','bright');
+  push(TODAY,'"'+note+'"','bright');
+  derive(); commit(); markDirty(true); closeVeil(); renderAll();
+}
+
+/* ---------- 탭 ---------- */
+var TABS=[['dungeon','던전'],['journal','일지'],['items','소지품'],['config','설정']];
+var cur='dungeon';
+function renderTabs(){
+  el('tabs').innerHTML=TABS.map(function(t){
+    return '<button role="tab" data-act="tab" data-t="'+t[0]+'" class="'+(cur===t[0]?'on':'')+'">'+t[1]+'</button>';
+  }).join('');
+}
+function show(t){
+  cur=t;
+  TABS.forEach(function(x){ el('v-'+x[0]).hidden=(x[0]!==t); });
+  renderTabs();
+  if(t==='dungeon') renderDungeon();        // 백업 경고가 최신 상태로 보여야 한다
+  if(t==='journal') renderJournal();
+  if(t==='items') renderItems();
+  if(t==='config') renderConfig();
+  window.scrollTo(0,0);
+}
+function renderAll(){ renderStatus(); renderDungeon(); show(cur); }
+
+/* ---------- 이벤트 ---------- */
+document.addEventListener('click',function(e){
+  var b=e.target.closest('[data-act]'); if(!b) return;
+  var a=b.getAttribute('data-act'), qid=b.getAttribute('data-q');
+  var q=qid?findQ(qid):null;
+
+  if(a==='tab'){ show(b.getAttribute('data-t')); return; }
+  if(a==='jyear'){ jYear=b.getAttribute('data-y'); jMonth=null; renderJBody(); return; }
+  if(a==='jmonth'){ jMonth=b.getAttribute('data-m'); renderJBody(); return; }
+  if(a==='jback'){ jMonth=null; renderJBody(); return; }
+  if(a==='enter'){ doEnter(); return; }
+  if(a==='return'){ openReturn(); return; }
+  if(a==='close-veil'){ closeVeil(); return; }
+  if(a==='go-config'){ closeVeil(); show('config'); return; }
+  if(a==='mood'){ pickedMood=b.getAttribute('data-m');
+    Array.prototype.forEach.call(b.parentNode.children,function(c){ c.classList.remove('on'); });
+    b.classList.add('on'); el('rt-err').textContent=''; return; }
+  if(a==='submit-return'){ submitReturn(); return; }
+
+  if(a==='tap'&&q){
+    if(q.mode==='check'){ complete(q,q.target,false); }
+    else { startTimer(q.id); }
+    return;
+  }
+  if(a==='undo'&&q){ uncomplete(q); return; }
+  if(a==='pause'){ pauseTimer(); return; }
+  if(a==='resume'&&q){ startTimer(q.id); return; }
+  if(a==='finish'&&q){ complete(q,Math.max(1,Math.round(elapsedMs()/60000)),false); return; }
+  if(a==='abort'){ stopTimer(); return; }
+
+  if(a==='addq'){
+    var name=(el('nq-name').value||'').trim();
+    var mode=el('nq-mode').value, min=parseInt(el('nq-min').value,10)||20;
+    if(!name){ el('nq-err').textContent='이름을 입력하라.'; return; }
+    S.quests.push({id:'q'+Date.now(),name:name,mode:mode,target:min,
+      xp:mode==='timer'?min:15});
+    S.questsUpdatedAt=new Date().toISOString();
+    commit(); markDirty(); renderConfig(); renderStatus(); renderDungeon(); return;
+  }
+  if(a==='delq'){
+    S.quests=S.quests.filter(function(x){ return x.id!==qid; });
+    S.questsUpdatedAt=new Date().toISOString();
+    commit(); markDirty(); renderConfig(); renderStatus(); renderDungeon(); return;
+  }
+  if(a==='sy-save'){
+    var repo=(el('sy-repo').value||'').trim()
+      .replace(/^https?:\/\/github\.com\//,'').replace(/\.git$/,'').replace(/\/+$/,'');
+    var tok=(el('sy-tok').value||'').trim(), er=el('sy-err');
+    er.style.color='';
+    if(!/^[\w.-]+\/[\w.-]+$/.test(repo)){ er.textContent='사용자명/저장소명 형태로 입력하라.'; return; }
+    if(!tok&&!token()){ er.textContent='토큰을 입력하라.'; return; }
+    if(tok) setToken(tok);
+    S.sync.repo=repo; S.sync.sha=null; S.sync.mdSha={};
+    commit();
+    er.style.color='var(--fg)'; er.textContent='확인 중…';
+    dirty=true; wantMd=true;
+    pullThenPush().then(function(){ renderConfig(); });
+    return;
+  }
+  if(a==='sy-push'){
+    if(!configured()){ el('sy-err').textContent='먼저 저장소를 연결하라.'; return; }
+    el('sy-err').style.color='var(--fg)'; el('sy-err').textContent='올리는 중…';
+    dirty=true; wantMd=true;
+    pushNow().then(function(){ renderConfig(); });
+    return;
+  }
+  if(a==='sy-pull'){
+    if(!configured()){ el('sy-err').textContent='먼저 저장소를 연결하라.'; return; }
+    if(!confirm('저장소의 기록으로 이 기기를 덮어쓴다.\n이 기기에만 있는 기록은 사라진다.')) return;
+    el('sy-err').style.color='var(--fg)'; el('sy-err').textContent='불러오는 중…';
+    restoreFromRemote().catch(function(e){
+      syncFail(e); commit(); renderConfig();
+      el('sy-err').textContent=String((e&&e.message)||e);
+    });
+    return;
+  }
+  if(a==='export'){
+    var blob=new Blob([JSON.stringify(exportState(),null,2)],{type:'application/json'});
+    var url=URL.createObjectURL(blob), aEl=document.createElement('a');
+    aEl.href=url; aEl.download='dungeon-log-'+TODAY+'.json'; aEl.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); },1000); return;
+  }
+  if(a==='import'){
+    var f=document.createElement('input'); f.type='file'; f.accept='application/json';
+    f.onchange=function(){
+      var file=f.files[0]; if(!file) return;
+      var r=new FileReader();
+      r.onload=function(){
+        try{ var d=migrate(JSON.parse(r.result));
+          if(!d) throw 0;
+          S=d; derive(); commit(); markDirty(); TODAY=keyOf(); renderAll();
+        }catch(err){ alert('읽을 수 없는 파일이다.'); }
+      };
+      r.readAsText(file);
+    };
+    f.click(); return;
+  }
+  if(a==='wipe'){
+    if(confirm('모든 기록을 지운다. 되돌릴 수 없다.')){
+      var keepRepo=S.sync&&S.sync.repo;
+      S=fresh();
+      if(keepRepo) S.sync.repo=keepRepo;     // 저장소 연결은 남긴다(복원하려면 필요하다)
+      derive(); commit(); TODAY=keyOf(); renderAll(); openEntry();
+    }
+    return;
+  }
+});
+document.addEventListener('input',function(e){
+  if(e.target.id==='rt-note') el('rt-err').textContent='';
+  if(e.target.id==='nq-name') el('nq-err').textContent='';
+  if(e.target.id==='sy-repo'||e.target.id==='sy-tok') el('sy-err').textContent='';
+  if(e.target.id==='jq'){ jQ=e.target.value; jMonth=null; renderJBody(); }
+});
+
+/* ---------- 날짜 전환 감시 ---------- */
+setInterval(function(){
+  var k=keyOf();
+  if(k!==TODAY){ TODAY=k; stopTimer(false); renderAll(); if(needEntry()) openEntry(); }
+},30000);
+
+/* ---------- 부팅 ---------- */
+derive();
+renderTabs();
+renderStatus();
+renderDungeon();
+if(S.timer&&S.timer.running) runTick();
+if(needEntry()) openEntry();
+
+/* 브라우저에 이 저장소를 함부로 비우지 말라고 알린다.
+   iOS 17+/Safari 17+에서 지원. 홈 화면 앱이면 승인될 확률이 높다.
+   승인돼도 폰 교체·데이터 삭제는 못 막는다 — 진짜 방어선은 원격 사본이다. */
+if(navigator.storage&&navigator.storage.persist){
+  navigator.storage.persisted().then(function(ok){
+    if(!ok) return navigator.storage.persist();
+  }).catch(function(){});
+}
+
+pullThenPush();          // 원격 사본과 맞춘다
+
+if('serviceWorker' in navigator && location.protocol.indexOf('http')===0){
+  navigator.serviceWorker.register('sw.js').catch(function(){});
+}
+})();
+</script>
+</body>
+</html>
