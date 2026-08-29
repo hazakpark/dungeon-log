@@ -496,7 +496,9 @@ function runTick(){
     var q=findQ(S.timer.qid);
     if(!q){ stopTimer(); return; }
     var mins=elapsedMs()/60000;
-    if(mins>=q.target){ complete(q,Math.round(mins),true); return; }
+    // 목표 도달로 자동 완료할 땐 목표치로 기록한다. 백그라운드에서 JS가 멈춰 있던
+    // 시간까지 탐험 시간으로 잡히면 누적 통계와 마크다운 사본이 오염된다.
+    if(mins>=q.target){ complete(q,q.target,true); return; }
     var n=el('t-'+q.id); if(n) n.textContent=fmtClock(elapsedMs());
   },1000);
 }
@@ -1070,6 +1072,9 @@ setInterval(function(){
 
 /* ---------- 부팅 ---------- */
 derive();
+// 어제 켜둔 타이머가 오늘로 넘어오면 안 된다. 앱이 닫혀 있는 동안에는
+// 날짜 전환 감시(하단 setInterval)가 돌지 않아 그대로 살아남는다.
+if(S.timer&&keyOf(new Date(S.timer.from))!==TODAY) stopTimer(false);
 renderTabs();
 renderStatus();
 renderDungeon();

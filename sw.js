@@ -1,5 +1,5 @@
 // 배포할 때마다 손으로 올린다. 올리지 않으면 오프라인에서 옛 버전이 남는다.
-var CACHE='dungeon-log-v2';
+var CACHE='dungeon-log-v3';
 var ASSETS=['./','./index.html','./manifest.json',
   './icon-180.png','./icon-192.png','./icon-512.png'];
 self.addEventListener('install',function(e){
