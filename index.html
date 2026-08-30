@@ -108,7 +108,7 @@ function write(d){
 }
 function fresh(){
   return {
-    version:2,
+    version:3,
     quests:[
       {id:'q1',name:'영어 공부',mode:'timer',target:30,xp:30},
       {id:'q2',name:'CIS 공부',mode:'timer',target:30,xp:30},
@@ -124,7 +124,7 @@ function fresh(){
 function migrate(d){
   if(!d||typeof d!=='object'||!d.quests||!d.days) return null;
   var v=d.version||1;
-  if(v>2) return null;                      // 미래 버전은 건드리지 않는다
+  if(v>3) return null;                      // 미래 버전은 건드리지 않는다
   if(v<2){
     Object.keys(d.days).forEach(function(k){
       var y=d.days[k];
@@ -134,6 +134,12 @@ function migrate(d){
     });
     if(d.questsUpdatedAt===undefined) d.questsUpdatedAt=null;
     d.version=2;
+  }
+  if(v<3){
+    Object.keys(d.days).forEach(function(k){
+      if(!d.days[k].extra) d.days[k].extra=[];         // 그날만의 퀘스트
+    });
+    d.version=3;
   }
   if(!d.sync) d.sync={repo:'',lastOk:null,lastErr:null,sha:null,mdSha:{}};
   if(!d.sync.mdSha) d.sync.mdSha={};
@@ -179,7 +185,7 @@ function bar(cur,need,n){
 function day(k){
   if(!S.days[k]) S.days[k]={entered:false,done:{},log:[],cleared:false,
     returned:false,mood:null,note:'',xp:0,drops:[],mult:1,
-    rolled:false,clearDrop:null};
+    rolled:false,clearDrop:null,extra:[]};
   return S.days[k];
 }
 function push(k,text,cls){
@@ -458,7 +464,7 @@ function toMarkdown(y){
     if(mins) meta.push(mins+'분 탐험');
     out.push(meta.join(' · '),'');
     if(d.note) out.push('> '+d.note,'');
-    var order=S.quests.map(function(q){ return q.id; });
+    var order=questsOf(k).map(function(q){ return q.id; });
     ids.sort(function(a,b){                  // 편성 순서 우선, 빠진 건 뒤로
       var ia=order.indexOf(a), ib=order.indexOf(b);
       return (ia<0?99:ia)-(ib<0?99:ib);
@@ -604,8 +610,18 @@ function fmtClock(ms){
   var s=Math.floor(ms/1000);
   return pad(Math.floor(s/60))+':'+pad(s%60);
 }
+/* 그날의 실제 편성 = 고정 편성 + 그날만의 퀘스트.
+   완주 판정·화면 목록은 전부 이걸 기준으로 본다. 오늘 것만 쓰는 게 아니라
+   과거 날짜에도 통하므로 일지·마크다운에서도 같은 함수를 쓴다. */
+function questsOf(k){
+  var d=S.days[k];
+  return S.quests.concat((d&&d.extra)||[]);
+}
+function todayQuests(){ return questsOf(TODAY); }
+
 function findQ(id){
-  for(var i=0;i<S.quests.length;i++) if(S.quests[i].id===id) return S.quests[i];
+  var all=todayQuests();
+  for(var i=0;i<all.length;i++) if(all[i].id===id) return all[i];
   return null;
 }
 
@@ -618,7 +634,7 @@ function complete(q,minutes,auto){
   d.done[q.id]={min:minutes||q.target,at:hm(),xp:gain,n:q.name};
   if(S.timer&&S.timer.qid===q.id) S.timer=null;
   push(TODAY,'「'+q.name+'」을(를) 마쳤다.  EXP +'+gain);
-  var all=S.quests.every(function(x){ return !!d.done[x.id]; });
+  var all=todayQuests().every(function(x){ return !!d.done[x.id]; });
   if(all&&!d.cleared) onClear(d);
   derive(); commit(); markDirty(); renderDungeon(); renderStatus();
   if(!auto){ var n=el('bx-'+q.id); if(n) burst(n); }
@@ -635,9 +651,9 @@ function dropClear(d){
 /* 편성이 바뀌면 오늘의 완주 여부를 다시 판정한다.
    퀘스트를 지워서 전부 완료가 되거나, 더해서 완주가 깨지는 경우를 잡는다. */
 function recheckClear(){
-  if(!S.quests.length) return;
+  if(!todayQuests().length) return;
   var d=day(TODAY);
-  var all=S.quests.every(function(x){ return !!d.done[x.id]; });
+  var all=todayQuests().every(function(x){ return !!d.done[x.id]; });
   if(all&&!d.cleared) onClear(d);
   else if(!all&&d.cleared){
     var lost=dropClear(d);
@@ -737,11 +753,12 @@ function statLine(){
 /* ---------- 화면: 상태창 ---------- */
 function renderStatus(){
   var L=levelInfo(), d=day(TODAY), sy=syncLine();
-  var doneN=S.quests.filter(function(q){ return !!d.done[q.id]; }).length;
+  var QS=todayQuests();
+  var doneN=QS.filter(function(q){ return !!d.done[q.id]; }).length;
   el('status').innerHTML=
     '<div class="box">'+
       '<div class="sp"><span class="bright">'+S.dayCount+'일차 던전</span>'+
-      '<span class="'+(d.cleared?'gold':'dim')+'">'+doneN+'/'+S.quests.length+
+      '<span class="'+(d.cleared?'gold':'dim')+'">'+doneN+'/'+QS.length+
       (d.cleared?' 클리어':'')+'</span></div>'+
       '<div class="sp"><span class="dim">Lv.<span style="color:var(--fg)">'+L.lv+'</span> '+rank(L.lv)+'</span>'+
       '<span class="gold">'+bar(L.cur,L.need)+' <span class="dim">'+L.cur+'/'+L.need+'</span></span></div>'+
@@ -753,9 +770,9 @@ function renderStatus(){
 
 /* ---------- 화면: 던전 ---------- */
 function renderDungeon(){
-  var d=day(TODAY), h='';
+  var d=day(TODAY), h='', QS=todayQuests();
   h+='<div class="sec">── 오늘의 퀘스트 ──</div>';
-  S.quests.forEach(function(q){
+  QS.forEach(function(q){
     var done=!!d.done[q.id];
     var active=S.timer&&S.timer.qid===q.id;
     h+='<div style="padding:3px 0">';
@@ -786,7 +803,7 @@ function renderDungeon(){
   } else if(d.cleared&&d.returned){
     h+='<div class="clear-banner">★ 귀환 완료 · 「'+esc(d.mood||'')+'」 ★</div>';
   } else {
-    var left=S.quests.length-S.quests.filter(function(q){return !!d.done[q.id];}).length;
+    var left=QS.length-QS.filter(function(q){return !!d.done[q.id];}).length;
     h+='<div class="sec warn" style="margin-top:14px">! '+left+'개 남음 · 완주하면 귀환할 수 있다</div>'+
        '<button class="ghost" data-act="return" style="margin-top:2px">완주하지 않고 귀환하기</button>';
   }
@@ -921,21 +938,7 @@ function renderItems(){
 
 /* ---------- 화면: 설정 ---------- */
 function renderConfig(){
-  var h='<div class="sec">── 퀘스트 편성 ──</div>';
-  S.quests.forEach(function(q,i){
-    h+='<div class="box" style="margin-bottom:8px">'+
-      '<div class="sp"><span>'+esc(q.name)+'</span>'+
-      '<button class="ghost" data-act="delq" data-q="'+q.id+'">삭제</button></div>'+
-      '<div class="dim">'+(q.mode==='timer'?'타이머 '+q.target+'분':'체크')+' · EXP '+q.xp+'</div></div>';
-  });
-  h+='<div class="sec">── 퀘스트 추가 ──</div>'+
-     '<input id="nq-name" placeholder="퀘스트 이름">'+
-     '<div class="row" style="margin-top:8px">'+
-       '<select id="nq-mode" style="flex:1"><option value="check">체크</option><option value="timer">타이머</option></select>'+
-       '<input id="nq-min" type="number" min="1" max="600" value="20" style="flex:1" aria-label="목표 분">'+
-     '</div>'+
-     '<div class="err" id="nq-err"></div>'+
-     '<button data-act="addq" style="width:100%">편성하기</button>';
+  var h='<div class="sec">── 퀘스트 편성 ──</div>'+questEditor();
   var sy=syncLine(), sync=S.sync||{};
   h+='<div class="sec">── 저장소 연결 ──</div>'+
      '<div class="box" style="margin-bottom:8px">'+
@@ -963,6 +966,66 @@ function renderConfig(){
   el('v-config').innerHTML=h;
 }
 
+/* 편집기는 입장 오버레이와 설정 탭 양쪽에 뜬다. 열려 있는 쪽만 다시 그린다. */
+function afterQuestChange(persist){
+  if(persist){ recheckClear(); derive(); commit(); markDirty(); }
+  if(el('veil').classList.contains('on')) openEntry();
+  else renderConfig();
+  renderStatus(); renderDungeon();
+}
+
+/* ---------- 퀘스트 편집기 (입장 오버레이 · 설정 탭 공용) ----------
+   기본은 접혀 있다. 매일 30초 안에 끝나야 하는 흐름에 편집 UI를 상시 노출하면
+   그 자체가 마찰이다(§11). `편집`을 눌렀을 때만 펼친다. */
+var editOpen=false, editQid=null;
+
+function questRow(q,fixed){
+  if(editQid===q.id){
+    return '<div class="box" style="margin-bottom:8px">'+
+      '<input id="eq-name" value="'+esc(q.name)+'" aria-label="퀘스트 이름">'+
+      '<div class="row" style="margin-top:8px">'+
+        '<select id="eq-mode" style="flex:1">'+
+          '<option value="check"'+(q.mode==='check'?' selected':'')+'>체크</option>'+
+          '<option value="timer"'+(q.mode==='timer'?' selected':'')+'>타이머</option></select>'+
+        '<input id="eq-min" type="number" min="1" max="600" value="'+q.target+'" style="flex:1" aria-label="목표 분">'+
+      '</div>'+
+      '<div class="err" id="eq-err"></div>'+
+      '<div class="row"><button class="solid" data-act="saveq" data-q="'+q.id+'" style="flex:1">저장</button>'+
+      '<button data-act="canceledit" style="flex:1">취소</button></div></div>';
+  }
+  return '<div class="box" style="margin-bottom:8px">'+
+    '<div class="sp"><span>'+esc(q.name)+
+      (fixed?'':' <span class="vio">「오늘만」</span>')+'</span>'+
+    '<span><button class="ghost" data-act="editq" data-q="'+q.id+'">수정</button>'+
+    '<button class="ghost warn" data-act="delq" data-q="'+q.id+'">삭제</button></span></div>'+
+    '<div class="dim">'+(q.mode==='timer'?'타이머 '+q.target+'분':'체크')+' · EXP '+q.xp+'</div></div>';
+}
+function questEditor(){
+  var d=day(TODAY), h='';
+  h+='<div class="sec dim">고정 편성 — 매일 나온다</div>';
+  if(!S.quests.length) h+='<div class="dim">없음</div>';
+  S.quests.forEach(function(q){ h+=questRow(q,true); });
+
+  h+='<div class="sec dim">오늘만 — 내일은 사라진다</div>';
+  if(!d.extra||!d.extra.length) h+='<div class="dim">없음</div>';
+  (d.extra||[]).forEach(function(q){ h+=questRow(q,false); });
+
+  h+='<div class="sec">── 퀘스트 추가 ──</div>'+
+     '<input id="nq-name" placeholder="퀘스트 이름">'+
+     '<div class="row" style="margin-top:8px">'+
+       '<select id="nq-mode" style="flex:1"><option value="check">체크</option><option value="timer">타이머</option></select>'+
+       '<input id="nq-min" type="number" min="1" max="600" value="20" style="flex:1" aria-label="목표 분">'+
+     '</div>'+
+     '<div class="row" style="margin-top:8px">'+
+       '<select id="nq-scope" style="flex:1">'+
+         '<option value="fixed">고정 — 매일</option>'+
+         '<option value="today">오늘만</option></select>'+
+     '</div>'+
+     '<div class="err" id="nq-err"></div>'+
+     '<button data-act="addq" style="width:100%">편성하기</button>';
+  return h;
+}
+
 /* ---------- 오버레이: 입장 ---------- */
 function openEntry(){
   var last=S.lastEntry, gap=last?daysBetween(last,TODAY):null;
@@ -982,10 +1045,14 @@ function openEntry(){
        '<div class="gold" style="margin-top:8px">복귀 보상 · 오늘 EXP 1.5배</div>'+
        '<div class="warn">「'+RECOVER+'」을(를) 받는다.</div>';
   }
-  h+='<div class="sec">── 오늘의 퀘스트 ──</div>';
-  S.quests.forEach(function(q){
-    h+='<div>[ ] '+esc(q.name)+(q.mode==='timer'?' <span class="dim">'+q.target+'분</span>':'')+'</div>';
+  h+='<div class="sp" style="margin:16px 0 6px"><span class="dim">── 오늘의 퀘스트 ──</span>'+
+     '<button class="ghost" data-act="toggleedit">'+(editOpen?'닫기':'편집')+'</button></div>';
+  todayQuests().forEach(function(q){
+    h+='<div>[ ] '+esc(q.name)+(q.mode==='timer'?' <span class="dim">'+q.target+'분</span>':'')+
+       (S.quests.indexOf(q)<0?' <span class="vio">「오늘만」</span>':'')+'</div>';
   });
+  if(!todayQuests().length) h+='<div class="warn">편성된 퀘스트가 없다. 편집에서 추가해라.</div>';
+  if(editOpen) h+='<div style="margin-top:12px">'+questEditor()+'</div>';
   h+='<div style="margin-top:24px"><button class="solid" data-act="enter" style="width:100%;padding:12px">입장한다</button></div>';
   el('veil-in').innerHTML=h;
   el('veil').classList.add('on');
@@ -996,11 +1063,12 @@ var pickedMood=null;
 function openReturn(){
   var d=day(TODAY);
   pickedMood=d.mood||null;
-  var doneN=S.quests.filter(function(q){ return !!d.done[q.id]; }).length;
+  var QS=todayQuests();
+  var doneN=QS.filter(function(q){ return !!d.done[q.id]; }).length;
   var mins=0; Object.keys(d.done).forEach(function(k){ mins+=d.done[k].min||0; });
   var h='<div class="sec">── 귀환 ──</div>'+
     '<div class="box"><div class="sp"><span class="bright">'+S.dayCount+'일차 던전</span>'+
-    '<span class="'+(d.cleared?'gold':'warn')+'">'+doneN+'/'+S.quests.length+
+    '<span class="'+(d.cleared?'gold':'warn')+'">'+doneN+'/'+QS.length+
     (d.cleared?' 클리어':' 부분 탐험')+'</span></div>'+
     '<div class="sp dim"><span>총 '+mins+'분 탐험</span><span>EXP +'+d.xp+'</span></div></div>';
 
@@ -1036,7 +1104,11 @@ function openReturn(){
   el('veil-in').innerHTML=h;
   el('veil').classList.add('on');
 }
-function closeVeil(){ el('veil').classList.remove('on'); }
+function closeVeil(){
+  el('veil').classList.remove('on');
+  el('veil-in').innerHTML='';        // 설정 탭과 입력칸 id가 겹치지 않게 비운다
+  editOpen=false; editQid=null;
+}
 
 function submitReturn(){
   var note=(el('rt-note').value||'').trim();
@@ -1099,22 +1171,48 @@ document.addEventListener('click',function(e){
   if(a==='finish'&&q){ complete(q,Math.max(1,Math.round(elapsedMs()/60000)),false); return; }
   if(a==='abort'){ stopTimer(); return; }
 
+  if(a==='toggleedit'){ editOpen=!editOpen; editQid=null; openEntry(); return; }
+  if(a==='editq'){ editQid=qid; afterQuestChange(false); return; }
+  if(a==='canceledit'){ editQid=null; afterQuestChange(false); return; }
+
   if(a==='addq'){
     var name=(el('nq-name').value||'').trim();
     var mode=el('nq-mode').value, min=parseInt(el('nq-min').value,10)||20;
+    var scope=el('nq-scope')?el('nq-scope').value:'fixed';
     if(!name){ el('nq-err').textContent='이름을 입력하라.'; return; }
-    S.quests.push({id:'q'+Date.now(),name:name,mode:mode,target:min,
-      xp:mode==='timer'?min:15});
-    S.questsUpdatedAt=new Date().toISOString();
-    recheckClear(); derive();
-    commit(); markDirty(); renderConfig(); renderStatus(); renderDungeon(); return;
+    var nq={id:(scope==='today'?'x':'q')+Date.now(),name:name,mode:mode,target:min,
+      xp:mode==='timer'?min:15};
+    if(scope==='today'){
+      var dd=day(TODAY);
+      if(!dd.extra) dd.extra=[];
+      dd.extra.push(nq);                     // 그날 레코드에 들어가므로 내일은 없다
+    } else {
+      S.quests.push(nq);
+      S.questsUpdatedAt=new Date().toISOString();
+    }
+    afterQuestChange(true); return;
+  }
+  if(a==='saveq'){
+    var q2=findQ(qid);
+    var nm=(el('eq-name').value||'').trim();
+    var md=el('eq-mode').value, mn=parseInt(el('eq-min').value,10)||20;
+    if(!nm){ el('eq-err').textContent='이름을 입력하라.'; return; }
+    if(q2){
+      // id는 그대로 둔다. 바꾸면 오늘 완료해둔 기록과의 연결이 끊긴다.
+      q2.name=nm; q2.mode=md; q2.target=mn; q2.xp=(md==='timer'?mn:q2.xp||15);
+      if(S.quests.indexOf(q2)>=0) S.questsUpdatedAt=new Date().toISOString();
+    }
+    editQid=null; afterQuestChange(true); return;
   }
   if(a==='delq'){
+    var wasFixed=S.quests.some(function(x){ return x.id===qid; });
     S.quests=S.quests.filter(function(x){ return x.id!==qid; });
-    S.questsUpdatedAt=new Date().toISOString();
+    var dx=day(TODAY);
+    dx.extra=(dx.extra||[]).filter(function(x){ return x.id!==qid; });
+    if(wasFixed) S.questsUpdatedAt=new Date().toISOString();
     if(S.timer&&S.timer.qid===qid) stopTimer(false);   // 지운 퀘스트의 타이머는 멈춘다
-    recheckClear(); derive();
-    commit(); markDirty(); renderConfig(); renderStatus(); renderDungeon(); return;
+    if(editQid===qid) editQid=null;
+    afterQuestChange(true); return;
   }
   if(a==='sy-save'){
     var repo=(el('sy-repo').value||'').trim()
@@ -1185,6 +1283,7 @@ document.addEventListener('click',function(e){
 document.addEventListener('input',function(e){
   if(e.target.id==='rt-note') el('rt-err').textContent='';
   if(e.target.id==='nq-name') el('nq-err').textContent='';
+  if(e.target.id==='eq-name') el('eq-err').textContent='';
   if(e.target.id==='sy-repo'||e.target.id==='sy-tok') el('sy-err').textContent='';
   if(e.target.id==='jq'){ jQ=e.target.value; jMonth=null; renderJBody(); }
 });
